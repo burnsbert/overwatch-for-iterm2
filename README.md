@@ -9,6 +9,8 @@ A live terminal dashboard for your iTerm2 tabs. See every tab's working director
 - **Live tab list** — shows current directory and session name for every tab across all windows
 - **Claude Code detection** — automatically identifies tabs running Claude Code and highlights them in magenta
 - **Tab switching** — press Enter to jump to any tab
+- **Tab labels** — press l to set a custom label for any tab, shown in yellow; clears when overwatch exits
+- **New tab** — press n to open a new tab
 - **Tab closing** — press x then y to close a tab (with confirmation)
 - **Claude Code usage limits** — when Claude Code is running, shows session (5h) and weekly (7d) utilization with color-coded progress bars and reset countdowns
 - **Auto-refresh** — tabs update every 10 seconds, usage limits every 2 minutes, or press r to refresh everything
@@ -38,6 +40,7 @@ overwatch
 |-----|--------|
 | `↑` `↓` | Navigate tabs |
 | `Enter` or `g` | Switch to selected tab |
+| `l` | Set or edit a label for the selected tab |
 | `n` | Open a new tab |
 | `x` | Close selected tab (asks for confirmation) |
 | `r` | Refresh tab list and usage data |

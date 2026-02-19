@@ -286,6 +286,7 @@ def main(stdscr):
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)                  # claude code tabs
     curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_MAGENTA)  # selected claude
     curses.init_pair(8, curses.COLOR_GREEN, -1)                    # overwatch badge
+    curses.init_pair(9, curses.COLOR_YELLOW, -1)                   # user labels
     stdscr.nodelay(True)
     stdscr.timeout(200)
 
@@ -296,6 +297,9 @@ def main(stdscr):
     usage_data = None
     selected = 0
     confirm_close = False
+    editing_label = False
+    label_buffer = ''
+    labels = {}  # tty -> label string (does not persist)
     status_msg = ''
     status_time = 0
 
@@ -341,7 +345,9 @@ def main(stdscr):
             if row >= height - bottom_reserved:
                 break
             short = shorten_path(path)
-            display_name = 'overwatch' if tty == MY_TTY else name
+            label = labels.get(tty) if tty else None
+            display_name = label or ('overwatch' if tty == MY_TTY else name)
+            has_label = bool(label)
             is_selected = (i == selected)
             is_claude = tty in claude_ttys
             is_me = (tty == MY_TTY)
@@ -359,8 +365,9 @@ def main(stdscr):
             dir_start = 9
             name_start = dir_start + 49
 
-            # Full line string for selected-row rendering
+            # Full line string for selected-row rendering (padded to fill width)
             line = f'{badge}{tab_col}  {short:<48} {display_name}'
+            line = line[:width - 1].ljust(width - 1)
 
             if is_selected and confirm_close:
                 stdscr.addnstr(row, 0, line, width - 1, curses.color_pair(4) | curses.A_BOLD)
@@ -373,19 +380,22 @@ def main(stdscr):
                 stdscr.addstr(row, 4, tab_col, curses.color_pair(3))
                 stdscr.addnstr(row, dir_start, f'{short:<48}', min(48, width - dir_start), curses.color_pair(2) | curses.A_BOLD)
                 if width > name_start:
-                    stdscr.addnstr(row, name_start, display_name, width - name_start - 1, curses.color_pair(8))
+                    name_color = curses.color_pair(9) | curses.A_BOLD if has_label else curses.color_pair(8)
+                    stdscr.addnstr(row, name_start, display_name, width - name_start - 1, name_color)
             elif is_claude:
                 stdscr.addstr(row, 0, badge, curses.color_pair(6) | curses.A_BOLD)
                 stdscr.addstr(row, 4, tab_col, curses.color_pair(3))
                 stdscr.addnstr(row, dir_start, f'{short:<48}', min(48, width - dir_start), curses.color_pair(6))
                 if width > name_start:
-                    stdscr.addnstr(row, name_start, display_name, width - name_start - 1, curses.color_pair(6))
+                    name_color = curses.color_pair(9) | curses.A_BOLD if has_label else curses.color_pair(6)
+                    stdscr.addnstr(row, name_start, display_name, width - name_start - 1, name_color)
             else:
                 stdscr.addstr(row, 0, badge, curses.A_DIM)
                 stdscr.addstr(row, 4, tab_col, curses.color_pair(3))
                 stdscr.addnstr(row, dir_start, f'{short:<48}', min(48, width - dir_start), curses.color_pair(2))
                 if width > name_start:
-                    stdscr.addnstr(row, name_start, display_name, width - name_start - 1, curses.color_pair(2))
+                    name_color = curses.color_pair(9) | curses.A_BOLD if has_label else curses.color_pair(2)
+                    stdscr.addnstr(row, name_start, display_name, width - name_start - 1, name_color)
             row += 1
 
         # Bottom section — divider
@@ -422,7 +432,10 @@ def main(stdscr):
 
         # Footer
         footer_row = height - 1
-        if confirm_close and tabs:
+        if editing_label:
+            prompt = f' Label: {label_buffer}\u2588'
+            stdscr.addnstr(footer_row, 0, prompt, width - 1, curses.color_pair(9) | curses.A_BOLD)
+        elif confirm_close and tabs:
             _, tab_num, path, name, _ = tabs[selected]
             prompt = f' Close tab {tab_num}? (y/n) '
             stdscr.addnstr(footer_row, 0, prompt, width - 1, curses.color_pair(4) | curses.A_BOLD)
@@ -432,8 +445,9 @@ def main(stdscr):
             controls = [
                 ('\u2191\u2193', ' select  '),
                 ('enter', ' goto  '),
+                ('l', ' label  '),
                 ('n', ' new  '),
-                ('x', ' close  '),
+                ('x', ' close tab  '),
                 ('r', ' refresh  '),
                 ('q', ' quit'),
             ]
@@ -450,6 +464,25 @@ def main(stdscr):
 
         # Key handling
         key = stdscr.getch()
+
+        if editing_label:
+            if key == 27:  # Escape
+                editing_label = False
+            elif key == ord('\n') or key == curses.KEY_ENTER:
+                if tabs:
+                    _, _, _, _, tty = tabs[selected]
+                    if tty:
+                        if label_buffer:
+                            labels[tty] = label_buffer
+                        elif tty in labels:
+                            del labels[tty]
+                editing_label = False
+                label_buffer = ''
+            elif key == curses.KEY_BACKSPACE or key == 127:
+                label_buffer = label_buffer[:-1]
+            elif key != -1 and 32 <= key <= 126:
+                label_buffer += chr(key)
+            continue
 
         if confirm_close:
             if key == ord('y') or key == ord('Y'):
@@ -475,6 +508,11 @@ def main(stdscr):
         elif key == ord('x') or key == ord('X'):
             if tabs:
                 confirm_close = True
+        elif key == ord('l') or key == ord('L'):
+            if tabs:
+                _, _, _, _, tty = tabs[selected]
+                label_buffer = labels.get(tty, '') if tty else ''
+                editing_label = True
         elif key == ord('n') or key == ord('N'):
             new_tab()
             status_msg = 'Opened new tab'
