@@ -10,8 +10,9 @@ A live terminal dashboard for your iTerm2 tabs. See every tab's working director
 - **Claude Code detection** — automatically identifies tabs running Claude Code and highlights them in magenta
 - **Tab switching** — press Enter to jump to any tab
 - **Tab closing** — press x then y to close a tab (with confirmation)
-- **Auto-refresh** — updates every 10 seconds, or press r to refresh immediately
-- **Zero dependencies** — just Python 3.6+ and macOS
+- **Claude Code usage limits** — when Claude Code is running, shows session (5h) and weekly (7d) utilization with color-coded progress bars and reset countdowns
+- **Auto-refresh** — tabs update every 10 seconds, usage limits every 2 minutes, or press r to refresh everything
+- **Zero dependencies** — just Python 3.7+ and macOS
 
 ## Install
 
@@ -19,9 +20,8 @@ A live terminal dashboard for your iTerm2 tabs. See every tab's working director
 # Clone
 git clone https://github.com/ericburns/overwatch-for-iterm2.git
 
-# Copy to your PATH
-cp overwatch-for-iterm2/overwatch /usr/local/bin/
-chmod +x /usr/local/bin/overwatch
+# Symlink to your PATH (always runs the latest)
+ln -sf "$(pwd)/overwatch-for-iterm2/overwatch" /usr/local/bin/overwatch
 ```
 
 Or just copy the single `overwatch` file anywhere on your `$PATH`.
@@ -51,13 +51,14 @@ overwatch
 
 ## How it works
 
-Overwatch uses AppleScript to query iTerm2 for tab metadata (session name, working directory, TTY) and `ps` to detect which TTYs have a `claude` process. Everything runs through macOS built-ins — no iTerm2 plugins or shell integration required.
+Overwatch uses AppleScript to query iTerm2 for tab metadata (session name, working directory, TTY) and `ps` to detect which TTYs have a `claude` process. Usage limits are fetched from the Anthropic API using your Claude Code OAuth token (stored in macOS Keychain). Everything runs through macOS built-ins — no iTerm2 plugins or shell integration required.
 
 ## Requirements
 
 - macOS
 - iTerm2
-- Python 3.6+
+- Python 3.7+
+- Claude Code (for usage limits feature — optional)
 
 ## License
 
