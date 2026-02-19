@@ -59,6 +59,15 @@ tell application "iTerm2"
 end tell
 '''
 
+NEW_TAB_APPLESCRIPT = '''
+tell application "iTerm2"
+    tell current window
+        create tab with default profile
+    end tell
+    activate
+end tell
+'''
+
 REFRESH_INTERVAL = 10
 USAGE_REFRESH_INTERVAL = 120
 
@@ -97,10 +106,54 @@ def fetch_tabs():
                 continue
             parts = line.split('\t', 4)
             if len(parts) == 5:
-                lines.append((parts[0], parts[1], parts[2], parts[3], parts[4]))
+                # AppleScript returns "missing value" for unset properties
+                cleaned = ['' if p == 'missing value' else p for p in parts]
+                lines.append((cleaned[0], cleaned[1], cleaned[2], cleaned[3], cleaned[4]))
         return lines
     except Exception as e:
         return [('1', '?', f'Error: {e}', '', '')]
+
+
+def fill_missing_paths(tabs):
+    """Use lsof to detect working directories when shell integration is unavailable."""
+    empty_ttys = {tty for _, _, path, _, tty in tabs if not path and tty}
+    if not empty_ttys:
+        return tabs
+    try:
+        # Find first (oldest = shell) PID per TTY
+        result = subprocess.run(
+            ['ps', '-eo', 'pid,tty'], capture_output=True, text=True, timeout=3
+        )
+        tty_pid = {}
+        for line in result.stdout.strip().split('\n')[1:]:
+            parts = line.split()
+            if len(parts) >= 2:
+                tty = f'/dev/{parts[1]}'
+                if tty in empty_ttys:
+                    tty_pid[tty] = parts[0]  # last (highest) PID = shell, not login
+        if not tty_pid:
+            return tabs
+        # Batch lsof for CWDs
+        result = subprocess.run(
+            ['lsof', '-a', '-d', 'cwd', '-p', ','.join(tty_pid.values()), '-Fn'],
+            capture_output=True, text=True, timeout=3
+        )
+        pid_cwd = {}
+        cur_pid = None
+        for line in result.stdout.split('\n'):
+            if line.startswith('p'):
+                cur_pid = line[1:]
+            elif line.startswith('n') and cur_pid:
+                pid_cwd[cur_pid] = line[1:]
+        tty_cwd = {tty: pid_cwd.get(pid, '') for tty, pid in tty_pid.items()}
+        return [(w, t, tty_cwd.get(tty, path) if not path else path, n, tty)
+                for w, t, path, n, tty in tabs]
+    except Exception:
+        return tabs
+
+
+def new_tab():
+    subprocess.run(['osascript', '-e', NEW_TAB_APPLESCRIPT], capture_output=True, timeout=5)
 
 
 def close_tab(win_num, tab_num):
@@ -249,7 +302,7 @@ def main(stdscr):
     while True:
         now = time.time()
         if now - last_fetch >= REFRESH_INTERVAL or last_fetch == 0:
-            tabs = fetch_tabs()
+            tabs = fill_missing_paths(fetch_tabs())
             claude_ttys = get_claude_ttys()
             last_fetch = now
             if selected >= len(tabs):
@@ -307,7 +360,7 @@ def main(stdscr):
             name_start = dir_start + 49
 
             # Full line string for selected-row rendering
-            line = f'{badge}{tab_col} {short:<48} {display_name}'
+            line = f'{badge}{tab_col}  {short:<48} {display_name}'
 
             if is_selected and confirm_close:
                 stdscr.addnstr(row, 0, line, width - 1, curses.color_pair(4) | curses.A_BOLD)
@@ -379,6 +432,7 @@ def main(stdscr):
             controls = [
                 ('\u2191\u2193', ' select  '),
                 ('enter', ' goto  '),
+                ('n', ' new  '),
                 ('x', ' close  '),
                 ('r', ' refresh  '),
                 ('q', ' quit'),
@@ -421,6 +475,11 @@ def main(stdscr):
         elif key == ord('x') or key == ord('X'):
             if tabs:
                 confirm_close = True
+        elif key == ord('n') or key == ord('N'):
+            new_tab()
+            status_msg = 'Opened new tab'
+            status_time = time.time()
+            last_fetch = 0
         elif key == ord('g') or key == ord('G') or key == ord('\n') or key == curses.KEY_ENTER:
             if tabs:
                 win_num, tab_num, _, _, _ = tabs[selected]

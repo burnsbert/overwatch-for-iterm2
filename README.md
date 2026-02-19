@@ -38,8 +38,9 @@ overwatch
 |-----|--------|
 | `↑` `↓` | Navigate tabs |
 | `Enter` or `g` | Switch to selected tab |
+| `n` | Open a new tab |
 | `x` | Close selected tab (asks for confirmation) |
-| `r` | Refresh tab list |
+| `r` | Refresh tab list and usage data |
 | `q` or `Esc` | Quit overwatch |
 
 ### Tab badges
