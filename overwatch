@@ -5,14 +5,18 @@ Shows current directory and session name for every tab, highlights
 Claude Code sessions, and lets you navigate, switch to, or close tabs
 without leaving the terminal.
 
-Requires macOS and iTerm2. No dependencies beyond Python 3.6+ stdlib.
+Requires macOS and iTerm2. No dependencies beyond Python 3.7+ stdlib.
 """
 
 import curses
+import json
 import os
 import pathlib
+import re
 import subprocess
 import time
+import urllib.request
+from datetime import datetime, timezone
 
 APPLESCRIPT = '''
 tell application "iTerm2"
@@ -56,6 +60,7 @@ end tell
 '''
 
 REFRESH_INTERVAL = 10
+USAGE_REFRESH_INTERVAL = 120
 
 MY_TTY = os.ttyname(0) if os.isatty(0) else ''
 HOME = str(pathlib.Path.home())
@@ -114,6 +119,108 @@ def shorten_path(path):
     return path
 
 
+def get_oauth_token():
+    """Retrieve Claude Code OAuth token from macOS Keychain."""
+    try:
+        result = subprocess.run(
+            ['security', 'find-generic-password',
+             '-s', 'Claude Code-credentials', '-w'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return None
+        creds = json.loads(result.stdout.strip())
+        return creds.get('claudeAiOauth', {}).get('accessToken')
+    except Exception:
+        return None
+
+
+def fetch_usage():
+    """Fetch usage data from the Claude Code API. Returns dict or None."""
+    token = get_oauth_token()
+    if not token:
+        return None
+    try:
+        req = urllib.request.Request(
+            'https://api.anthropic.com/api/oauth/usage',
+            method='GET',
+            headers={
+                'Authorization': f'Bearer {token}',
+                'anthropic-beta': 'oauth-2025-04-20',
+                'Content-Type': 'application/json',
+            }
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
+def parse_iso(iso_string):
+    """Parse an ISO 8601 datetime string (Python 3.7+ compatible)."""
+    try:
+        return datetime.fromisoformat(iso_string)
+    except (ValueError, AttributeError):
+        # Python < 3.11: fromisoformat doesn't handle +HH:MM offsets
+        s = re.sub(r'([+-]\d{2}):(\d{2})$', r'\1\2', iso_string)
+        fmt = '%Y-%m-%dT%H:%M:%S.%f%z' if '.' in s else '%Y-%m-%dT%H:%M:%S%z'
+        return datetime.strptime(s, fmt)
+
+
+def format_abs_time(dt_local):
+    """Format a local datetime as 'Today at 2:59pm', 'Friday at 11:59am', etc."""
+    today = datetime.now().date()
+    delta_days = (dt_local.date() - today).days
+    time_str = dt_local.strftime('%-I:%M') + dt_local.strftime('%p').lower()
+
+    if delta_days == 0:
+        return f'Today at {time_str}'
+    if delta_days == 1:
+        return f'Tomorrow at {time_str}'
+    if delta_days < 7:
+        return f'{dt_local.strftime("%A")} at {time_str}'
+    return f'{dt_local.strftime("%b %-d")} at {time_str}'
+
+
+def format_reset_time(iso_string):
+    """Format ISO timestamp as '2h 15m (Today at 2:59pm)' or '5d 3h (Friday at 11:59am)'."""
+    if not iso_string:
+        return ''
+    try:
+        reset_utc = parse_iso(iso_string)
+        total_seconds = int((reset_utc - datetime.now(timezone.utc)).total_seconds())
+        if total_seconds <= 0:
+            return 'now'
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+        if days > 0:
+            relative = f'{days}d {hours}h'
+        elif hours > 0:
+            relative = f'{hours}h {minutes}m'
+        else:
+            relative = f'{minutes}m'
+        reset_local = reset_utc.astimezone()
+        return f'{relative} ({format_abs_time(reset_local)})'
+    except Exception:
+        return ''
+
+
+def usage_bar(pct, width=15):
+    """Return a text progress bar for the given percentage."""
+    filled = round(pct / 100 * width)
+    return '\u2588' * filled + '\u2591' * (width - filled)
+
+
+def usage_color(pct):
+    """Return curses color pair number based on usage percentage."""
+    if pct >= 80:
+        return 4  # red
+    if pct >= 50:
+        return 3  # yellow
+    return 8  # green
+
+
 def main(stdscr):
     curses.curs_set(0)
     curses.use_default_colors()
@@ -130,8 +237,10 @@ def main(stdscr):
     stdscr.timeout(200)
 
     last_fetch = 0
+    last_usage_fetch = 0
     tabs = []
     claude_ttys = set()
+    usage_data = None
     selected = 0
     confirm_close = False
     status_msg = ''
@@ -146,13 +255,26 @@ def main(stdscr):
             if selected >= len(tabs):
                 selected = max(0, len(tabs) - 1)
 
+        # Fetch usage when Claude Code is running (once per minute)
+        has_claude = bool(claude_ttys)
+        if has_claude and (now - last_usage_fetch >= USAGE_REFRESH_INTERVAL
+                          or last_usage_fetch == 0):
+            usage_data = fetch_usage()
+            last_usage_fetch = now
+        elif not has_claude:
+            usage_data = None
+            last_usage_fetch = 0
+
         stdscr.erase()
         height, width = stdscr.getmaxyx()
+
+        show_usage = usage_data is not None and has_claude
+        bottom_reserved = 5 if show_usage else 3
 
         # Header
         title = ' OVERWATCH'
         stdscr.addnstr(0, 0, title, width - 1, curses.color_pair(1) | curses.A_BOLD)
-        stdscr.addnstr(1, 0, '─' * min(width - 1, 90), width - 1, curses.color_pair(1))
+        stdscr.addnstr(1, 0, '\u2500' * min(width - 1, 90), width - 1, curses.color_pair(1))
 
         # Column headers
         row = 2
@@ -163,7 +285,7 @@ def main(stdscr):
 
         # Tab rows
         for i, (win_num, tab_num, path, name, tty) in enumerate(tabs):
-            if row >= height - 3:
+            if row >= height - bottom_reserved:
                 break
             short = shorten_path(path)
             display_name = 'overwatch' if tty == MY_TTY else name
@@ -213,12 +335,33 @@ def main(stdscr):
                     stdscr.addnstr(row, name_start, display_name, width - name_start - 1, curses.color_pair(2))
             row += 1
 
+        # Bottom section — divider
+        divider_row = height - bottom_reserved
+        if divider_row > row:
+            stdscr.addnstr(divider_row, 0, '\u2500' * min(width - 1, 90), width - 1, curses.color_pair(1))
+
+        # Usage display (when Claude Code is running)
+        if show_usage:
+            for offset, label, key in [(1, 'CC Session Limit', 'five_hour'),
+                                       (2, 'CC Weekly Limit ', 'seven_day')]:
+                urow = divider_row + offset
+                if urow < height - 2:
+                    bucket = usage_data.get(key) or {}
+                    pct = bucket.get('utilization') or 0
+                    reset = format_reset_time(bucket.get('resets_at'))
+                    bar = usage_bar(pct)
+                    color = usage_color(pct)
+
+                    stdscr.addstr(urow, 1, label, curses.color_pair(1) | curses.A_BOLD)
+                    pct_str = f'{pct:3.0f}%'
+                    stdscr.addstr(urow, 19, pct_str, curses.color_pair(color) | curses.A_BOLD)
+                    stdscr.addstr(urow, 25, bar, curses.color_pair(color))
+                    if reset:
+                        stdscr.addstr(urow, 41, f'  resets in {reset}', curses.A_DIM)
+
         # Legend
-        legend_row = height - 3
+        legend_row = height - 2
         if legend_row > row:
-            stdscr.addnstr(legend_row, 0, '─' * min(width - 1, 90), width - 1, curses.color_pair(1))
-        legend_row += 1
-        if legend_row > row and legend_row < height:
             stdscr.addstr(legend_row, 1, ' CC ', curses.color_pair(6) | curses.A_BOLD)
             stdscr.addstr(legend_row, 6, 'Claude Code', curses.A_DIM)
             stdscr.addstr(legend_row, 20, ' >> ', curses.color_pair(8) | curses.A_BOLD)
@@ -234,7 +377,7 @@ def main(stdscr):
             stdscr.addnstr(footer_row, 0, f' {status_msg}', width - 1, curses.color_pair(3))
         else:
             controls = [
-                ('↑↓', ' select  '),
+                ('\u2191\u2193', ' select  '),
                 ('enter', ' goto  '),
                 ('x', ' close  '),
                 ('r', ' refresh  '),
@@ -270,6 +413,7 @@ def main(stdscr):
             break
         elif key == ord('r') or key == ord('R'):
             last_fetch = 0
+            last_usage_fetch = 0
         elif key == curses.KEY_UP:
             selected = max(0, selected - 1)
         elif key == curses.KEY_DOWN:
