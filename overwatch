@@ -316,7 +316,9 @@ def main(stdscr):
         has_claude = bool(claude_ttys)
         if has_claude and (now - last_usage_fetch >= USAGE_REFRESH_INTERVAL
                           or last_usage_fetch == 0):
-            usage_data = fetch_usage()
+            fresh = fetch_usage()
+            if fresh is not None:
+                usage_data = fresh
             last_usage_fetch = now
         elif not has_claude:
             usage_data = None
