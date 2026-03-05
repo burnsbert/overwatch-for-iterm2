@@ -70,7 +70,7 @@ end tell
 '''
 
 REFRESH_INTERVAL = 10
-USAGE_REFRESH_INTERVAL = 240
+USAGE_REFRESH_INTERVAL = 120
 
 MY_TTY = os.ttyname(0) if os.isatty(0) else ''
 HOME = str(pathlib.Path.home())
