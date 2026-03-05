@@ -15,8 +15,9 @@ import pathlib
 import re
 import subprocess
 import time
+import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 APPLESCRIPT = '''
 tell application "iTerm2"
@@ -69,7 +70,7 @@ end tell
 '''
 
 REFRESH_INTERVAL = 10
-USAGE_REFRESH_INTERVAL = 120
+USAGE_REFRESH_INTERVAL = 240
 
 MY_TTY = os.ttyname(0) if os.isatty(0) else ''
 HOME = str(pathlib.Path.home())
@@ -189,10 +190,13 @@ def get_oauth_token():
 
 
 def fetch_usage():
-    """Fetch usage data from the Claude Code API. Returns dict or None."""
+    """Fetch usage data from the Claude Code API. Returns (dict, retry_after) or (None, retry_after).
+
+    retry_after is seconds to wait before retrying (from Retry-After header), or None.
+    """
     token = get_oauth_token()
     if not token:
-        return None
+        return None, None
     try:
         req = urllib.request.Request(
             'https://api.anthropic.com/api/oauth/usage',
@@ -201,12 +205,20 @@ def fetch_usage():
                 'Authorization': f'Bearer {token}',
                 'anthropic-beta': 'oauth-2025-04-20',
                 'Content-Type': 'application/json',
+                'User-Agent': 'claude-code/2.1.69',
             }
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode())
+            return json.loads(resp.read().decode()), None
+    except urllib.error.HTTPError as e:
+        retry = None
+        try:
+            retry = int(e.headers.get('Retry-After', ''))
+        except (ValueError, TypeError):
+            pass
+        return None, retry
     except Exception:
-        return None
+        return None, None
 
 
 def parse_iso(iso_string):
@@ -259,6 +271,54 @@ def format_reset_time(iso_string):
         return ''
 
 
+WINDOW_HOURS = {
+    'five_hour': 5,
+    'seven_day': 168,
+    'seven_day_sonnet': 168,
+}
+
+LIMIT_SHORT_NAMES = {
+    'five_hour': 'session',
+    'seven_day': 'weekly',
+    'seven_day_sonnet': 'sonnet',
+}
+
+
+def limit_projection(key, bucket):
+    """Return a warning string if the limit is hit or on pace to be hit, else None."""
+    if not bucket:
+        return None
+    pct = bucket.get('utilization') or 0
+    resets_at = bucket.get('resets_at')
+    if not resets_at or pct <= 0:
+        return None
+    window_h = WINDOW_HOURS.get(key)
+    if not window_h:
+        return None
+    try:
+        reset_utc = parse_iso(resets_at)
+        now = datetime.now(timezone.utc)
+        secs_remaining = max(0, (reset_utc - now).total_seconds())
+        window_secs = window_h * 3600
+        elapsed_secs = window_secs - secs_remaining
+        if elapsed_secs <= 0:
+            return None
+        elapsed_pct = (elapsed_secs / window_secs) * 100
+        name = LIMIT_SHORT_NAMES.get(key, key)
+        if pct >= 100:
+            return (f'  \u26a0 {name} limit hit', True)
+        if pct >= elapsed_pct:
+            # Project when we'll hit 100% at current rate
+            rate = pct / elapsed_secs  # pct per second
+            secs_to_100 = (100 - pct) / rate
+            hit_time = now + timedelta(seconds=secs_to_100)
+            hit_local = hit_time.astimezone()
+            return (f'  \u26a0 on pace to hit {name} limit {format_abs_time(hit_local)}', False)
+    except Exception:
+        pass
+    return None
+
+
 def usage_bar(pct, width=15):
     """Return a text progress bar for the given percentage."""
     filled = round(pct / 100 * width)
@@ -292,9 +352,11 @@ def main(stdscr):
 
     last_fetch = 0
     last_usage_fetch = 0
+    usage_interval = USAGE_REFRESH_INTERVAL
     tabs = []
     claude_ttys = set()
     usage_data = None
+    usage_fetch_ok = True
     selected = 0
     confirm_close = False
     editing_label = False
@@ -314,21 +376,40 @@ def main(stdscr):
 
         # Fetch usage when Claude Code is running (once per minute)
         has_claude = bool(claude_ttys)
-        if has_claude and (now - last_usage_fetch >= USAGE_REFRESH_INTERVAL
+        if has_claude and (now - last_usage_fetch >= usage_interval
                           or last_usage_fetch == 0):
-            fresh = fetch_usage()
+            fresh, retry_after = fetch_usage()
+            usage_fetch_ok = fresh is not None
             if fresh is not None:
                 usage_data = fresh
+                usage_interval = USAGE_REFRESH_INTERVAL
+            else:
+                # Respect server's Retry-After, but never less than normal interval
+                usage_interval = max(USAGE_REFRESH_INTERVAL,
+                                     retry_after if retry_after else 0)
             last_usage_fetch = now
         elif not has_claude:
             usage_data = None
+            usage_fetch_ok = True
+            usage_interval = USAGE_REFRESH_INTERVAL
             last_usage_fetch = 0
 
         stdscr.erase()
         height, width = stdscr.getmaxyx()
 
         show_usage = usage_data is not None and has_claude
-        bottom_reserved = 5 if show_usage else 3
+        show_fetch_err = has_claude and not usage_fetch_ok and usage_data is None
+        usage_keys = ['five_hour', 'seven_day', 'seven_day_sonnet']
+        active_keys = [k for k in usage_keys
+                       if usage_data and usage_data.get(k)] if show_usage else []
+        # Pre-compute projections once (used for layout and rendering)
+        projections = {k: limit_projection(k, usage_data.get(k))
+                       for k in active_keys} if show_usage else {}
+        warning_count = sum(1 for v in projections.values() if v)
+        usage_section = len(active_keys) + warning_count
+        if show_fetch_err:
+            usage_section += 1  # room for the error line
+        bottom_reserved = (3 + usage_section) if usage_section > 0 else 3
 
         # Header
         title = ' OVERWATCH'
@@ -407,22 +488,39 @@ def main(stdscr):
 
         # Usage display (when Claude Code is running)
         if show_usage:
-            for offset, label, key in [(1, 'CC Session Limit', 'five_hour'),
-                                       (2, 'CC Weekly Limit ', 'seven_day')]:
-                urow = divider_row + offset
+            label_map = {'five_hour': 'CC Session Limit',
+                         'seven_day': 'CC Weekly Limit ',
+                         'seven_day_sonnet': 'CC Sonnet Limit '}
+            urow = divider_row
+            for key in active_keys:
+                bucket = usage_data.get(key) or {}
+                urow += 1
                 if urow < height - 2:
-                    bucket = usage_data.get(key) or {}
                     pct = bucket.get('utilization') or 0
                     reset = format_reset_time(bucket.get('resets_at'))
                     bar = usage_bar(pct)
                     color = usage_color(pct)
+                    ulabel = label_map[key]
 
-                    stdscr.addstr(urow, 1, label, curses.color_pair(1) | curses.A_BOLD)
+                    stdscr.addstr(urow, 1, ulabel, curses.color_pair(1) | curses.A_BOLD)
                     pct_str = f'{pct:3.0f}%'
                     stdscr.addstr(urow, 19, pct_str, curses.color_pair(color) | curses.A_BOLD)
                     stdscr.addstr(urow, 25, bar, curses.color_pair(color))
                     if reset:
                         stdscr.addstr(urow, 41, f'  resets in {reset}', curses.A_DIM)
+                proj = projections.get(key)
+                if proj:
+                    urow += 1
+                    if urow < height - 2:
+                        text, is_hit = proj
+                        wcolor = 4 if is_hit else 3
+                        stdscr.addnstr(urow, 0, text, width - 1,
+                                       curses.color_pair(wcolor) | curses.A_BOLD)
+
+        if show_fetch_err:
+            err_row = divider_row + 1 + len(active_keys) + warning_count
+            if err_row < height - 2:
+                stdscr.addstr(err_row, 1, '  usage API fetch failed', curses.A_DIM)
 
         # Legend
         legend_row = height - 2
@@ -502,7 +600,8 @@ def main(stdscr):
             break
         elif key == ord('r') or key == ord('R'):
             last_fetch = 0
-            last_usage_fetch = 0
+            if now - last_usage_fetch >= 10:
+                last_usage_fetch = 0
         elif key == curses.KEY_UP:
             selected = max(0, selected - 1)
         elif key == curses.KEY_DOWN:
