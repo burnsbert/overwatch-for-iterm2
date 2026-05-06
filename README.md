@@ -19,15 +19,28 @@ A live terminal dashboard for your iTerm2 tabs. See every tab's working director
 
 ## Install
 
+### Homebrew (recommended)
+
+```bash
+brew tap burnsbert/overwatch-for-iterm2 https://github.com/burnsbert/overwatch-for-iterm2
+brew install burnsbert/overwatch-for-iterm2/overwatch
+```
+
+### Manual
+
 ```bash
 # Clone
-git clone https://github.com/ericburns/overwatch-for-iterm2.git
+git clone https://github.com/burnsbert/overwatch-for-iterm2.git
 
 # Symlink to your PATH (always runs the latest)
 ln -sf "$(pwd)/overwatch-for-iterm2/overwatch" /usr/local/bin/overwatch
 ```
 
 Or just copy the single `overwatch` file anywhere on your `$PATH`.
+
+### Permissions
+
+Overwatch uses AppleScript to query iTerm2. On first run, macOS may prompt for Automation access. If the tab list appears empty, go to **System Settings → Privacy & Security → Automation** and ensure your terminal has permission to control iTerm2.
 
 ## Usage
 
