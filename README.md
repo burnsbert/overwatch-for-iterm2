@@ -57,6 +57,7 @@ overwatch
 | `l` | Set or edit a label for the selected tab |
 | `n` | Open a new tab |
 | `x` | Close selected tab (asks for confirmation) |
+| `$` | Show or hide the Claude Code monthly dollar limit, hidden by default |
 | `r` | Refresh tab list and usage data |
 | `q` or `Esc` | Quit overwatch |
 
@@ -79,7 +80,7 @@ The footer can show:
 | `CC Session Limit` | Claude Code rolling 5-hour subscription window |
 | `CC Weekly Limit` | Claude Code rolling 7-day subscription window |
 | `CC Sonnet Limit` | Claude Code rolling 7-day Sonnet-specific window, when present |
-| `CC Monthly Limit` | Claude Code extra-usage/token-billed monthly cap, displayed as percentage only |
+| `CC Monthly Limit` | Claude Code extra-usage/token-billed monthly cap, displayed as percentage by default |
 | `CX 5h Limit` | Codex primary 5-hour window |
 | `CX 7d Limit` | Codex secondary 7-day window |
 
@@ -91,7 +92,7 @@ When Codex is running, Overwatch reads your local Codex OAuth token from `~/.cod
 
 ### Claude Code limits
 
-When Claude Code is running, Overwatch reads your Claude Code OAuth token from macOS Keychain and fetches usage from Anthropic's Claude Code OAuth usage endpoint every 5 minutes. Pro/Max-style plans display rolling 5-hour and 7-day windows when available. Extra-usage or token-billed setups display the monthly spending cap as `CC Monthly Limit` with percentage-only usage, a reset countdown to local midnight on the first day of the next month, and a pace warning when current usage would exhaust the cap before month-end. Dollar amounts and cap values are intentionally not displayed.
+When Claude Code is running, Overwatch reads your Claude Code OAuth token from macOS Keychain and fetches usage from Anthropic's Claude Code OAuth usage endpoint every 5 minutes. Pro/Max-style plans display rolling 5-hour and 7-day windows when available. Extra-usage or token-billed setups display the monthly spending cap as `CC Monthly Limit` with percentage usage, a reset countdown to local midnight on the first day of the next month, and a pace warning when current usage would exhaust the cap before month-end. The dollar cap is hidden by default; press `$` to show or hide it for the current Overwatch session.
 
 ## How it works
 

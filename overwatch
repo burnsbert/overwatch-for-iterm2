@@ -474,7 +474,18 @@ def monthly_limit_projection(pct, has_limit):
     return None
 
 
-def claude_extra_usage_row(usage):
+def format_dollar_limit(value):
+    """Format Claude Code credit units as dollars."""
+    try:
+        amount = float(value) / 100
+    except (TypeError, ValueError):
+        return ''
+    if amount.is_integer():
+        return f'${amount:,.0f}'
+    return f'${amount:,.2f}'
+
+
+def claude_extra_usage_row(usage, show_dollar_limit=False):
     """Return display row for Claude Code extra/monthly usage limits."""
     if not usage:
         return None
@@ -494,7 +505,15 @@ def claude_extra_usage_row(usage):
 
     if limit:
         label = 'CC Monthly Limit'
-        detail = f'  resets in {format_reset_delta(next_month_start())}'
+        details = []
+        if show_dollar_limit:
+            dollar_limit = format_dollar_limit(limit)
+            if dollar_limit:
+                details.append(f'limit {dollar_limit}')
+        reset = format_reset_delta(next_month_start())
+        if reset:
+            details.append(f'resets in {reset}')
+        detail = f'  {", ".join(details)}' if details else ''
     else:
         label = 'CC Extra Usage '
         detail = ''
@@ -638,6 +657,7 @@ def main(stdscr):
     editing_label = False
     label_buffer = ''
     labels = {}  # tty -> label string (does not persist)
+    show_claude_monthly_dollars = False
     status_msg = ''
     status_time = 0
 
@@ -699,7 +719,8 @@ def main(stdscr):
         usage_keys = ['five_hour', 'seven_day', 'seven_day_sonnet']
         active_keys = [k for k in usage_keys
                        if usage_data and usage_data.get(k)] if show_usage else []
-        claude_extra_row = (claude_extra_usage_row(usage_data)
+        claude_extra_row = (claude_extra_usage_row(usage_data,
+                                                    show_claude_monthly_dollars)
                             if show_usage else None)
         # Pre-compute projections once (used for layout and rendering)
         projections = {k: limit_projection(k, usage_data.get(k))
@@ -951,6 +972,7 @@ def main(stdscr):
                 ('l', ' label  '),
                 ('n', ' new  '),
                 ('x', ' close tab  '),
+                ('$', ' dollars  '),
                 ('r', ' refresh  '),
                 ('q', ' quit'),
             ]
@@ -1014,6 +1036,11 @@ def main(stdscr):
         elif key == ord('x') or key == ord('X'):
             if tabs:
                 confirm_close = True
+        elif key == ord('$'):
+            show_claude_monthly_dollars = not show_claude_monthly_dollars
+            status = 'shown' if show_claude_monthly_dollars else 'hidden'
+            status_msg = f'Claude monthly dollar limit {status}'
+            status_time = time.time()
         elif key == ord('l') or key == ord('L'):
             if tabs:
                 _, _, _, _, tty = tabs[selected]

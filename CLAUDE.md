@@ -24,7 +24,7 @@ The `overwatch` file is a self-contained curses TUI application:
 - **`fetch_tabs()`** — executes the main AppleScript, parses TSV output into `(window, tab, path, name, tty)` tuples
 - **Claude Code usage limits** — reads Claude Code OAuth credentials from macOS Keychain and displays available rolling-window limits plus percentage-only extra-usage monthly limits; monthly reset is local midnight on the first day of the next month
 - **Codex usage limits** — reads the local Codex OAuth token from `~/.codex/auth.json` and fetches account usage every 5 minutes
-- **Usage footer layout** — usage rows share fixed columns for label, percent, bar, and reset details; do not display Claude Code dollar amounts or monthly cap values
+- **Usage footer layout** — usage rows share fixed columns for label, percent, bar, and reset details; hide Claude Code monthly dollar cap values by default, with `$` toggling them for the current run
 - **`main(stdscr)`** — curses event loop with 200ms input timeout and 10-second auto-refresh (`REFRESH_INTERVAL`). Handles rendering (header, tab rows, legend, footer) and keyboard input (navigation, goto, close with confirmation, refresh, quit)
 
 ## Platform Constraints
