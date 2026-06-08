@@ -980,10 +980,14 @@ def main(stdscr):
             for key_label, desc in controls:
                 if col >= width - 1:
                     break
-                stdscr.addstr(footer_row, col, key_label, curses.color_pair(1) | curses.A_BOLD)
-                col += len(key_label)
-                stdscr.addstr(footer_row, col, desc, curses.A_DIM)
-                col += len(desc)
+                avail = width - col - 1
+                stdscr.addnstr(footer_row, col, key_label, avail, curses.color_pair(1) | curses.A_BOLD)
+                col += min(len(key_label), avail)
+                if col >= width - 1:
+                    break
+                avail = width - col - 1
+                stdscr.addnstr(footer_row, col, desc, avail, curses.A_DIM)
+                col += min(len(desc), avail)
 
         stdscr.refresh()
 
